@@ -8,22 +8,47 @@ const { exit } = require('process');
 const { spawn } = require('child_process');
 const { debuglog } = require('util');
 const querystring = require('querystring');
-
 const debug = debuglog("smart-matrix-server");
 
 /*
 
 Required environment variables for applet-sender to function
-MQTT_[HOSTNAME,USERNAME,PASSWORD]
-REDIS_[HOSTNAME,USERNAME,PASSWORD],
-[CONFIG,APPLET]_FOLDER
+
+const host = ' YOUR HOME ASSISTANT HOST '
+const clientId = ' RANDOM MQTT ID '
+
+
+!!!!!
+Change these Below
+--------------------------------------------------------------
+
+In the configuration file for the device, the layout is as follows:
+|-- config/
+  |__ DEVICE-NAME.JSON
+  
+{
+      "name": "APLLET_NAME",
+      "duration": 20,
+      "config": {
+        "homeassistant_server": "https://HOMEASSISTANT_HOST",
+        "entity_id": "YOUR.DATA",
+        "auth": " HOME_ASSISTANT  "
+      }
 
 */
+const protocol = 'mqtt'
+const host = 'Home_Assistant_Host' // Change Me!!
+const port = '1883' 
+const clientId = `mqtt_2cf54eb1ee93`
+const connectUrl = `${protocol}://${host}:${port}`;
 
-const client  = mqtt.connect(process.env.MQTT_HOSTNAME, {
-    username: process.env.MQTT_USERNAME,
-    password: process.env.MQTT_PASSWORD,
-});
+// Change these
+
+const client = mqtt.connect(connectUrl, {
+    clientId,
+    username: 'USERNAME',
+    password: 'PASSWORD',
+  })
 
 const DEVICE_TOPIC_PREFIX = process.env.SMARTMATRIX_TOPIC_PREFIX || 'plm';
 console.log("Using device topic prefix:", DEVICE_TOPIC_PREFIX);
@@ -41,14 +66,14 @@ if(APPLET_FOLDER === undefined) {
 let { DEVICE_TIMEOUT } = process.env;
 if(DEVICE_TIMEOUT === undefined) {
     console.log("DEVICE_TIMEOUT not set, using 60 seconds ...");
-    DEVICE_TIMEOUT = ms("60s");
+    DEVICE_TIMEOUT = ms("20s");
 }
 DEVICE_TIMEOUT = ms(DEVICE_TIMEOUT);
 
 let { DEVICE_LOOP_INTERVAL } = process.env;
 if(DEVICE_LOOP_INTERVAL === undefined) {
     console.log("DEVICE_LOOP_INTERVAL not set, using 10 second ...");
-    DEVICE_LOOP_INTERVAL = ms("10s");
+    DEVICE_LOOP_INTERVAL = ms("15s");
 }
 console.log(`Devices will loop every ${DEVICE_LOOP_INTERVAL} seconds`);
 DEVICE_LOOP_INTERVAL = ms(DEVICE_LOOP_INTERVAL);
@@ -56,13 +81,13 @@ DEVICE_LOOP_INTERVAL = ms(DEVICE_LOOP_INTERVAL);
 let { DEVICE_PING_INTERVAL } = process.env;
 if(DEVICE_PING_INTERVAL === undefined) {
     console.log("DEVICE_PING_INTERVAL not set, using 30 seconds ...");
-    DEVICE_PING_INTERVAL = ms("30s");
+    DEVICE_PING_INTERVAL = ms("5s");
 }
 console.log(`Devices will ping every ${DEVICE_PING_INTERVAL} seconds`);
 DEVICE_PING_INTERVAL = ms(DEVICE_PING_INTERVAL);
 
 const scheduler = new ToadScheduler();
-let chunkSize = 19950;
+let chunkSize = 2048;
 
 let config = {};
 
@@ -94,7 +119,7 @@ while ((file = directory.readSync()) !== null) {
             console.error("Error loading post process file for device", postProcessFilePath, device, error);
         }
     }
-
+    
     config[device] = {
         pinApplet: false,
         currentApplet: -1,
@@ -120,12 +145,14 @@ directory.closeSync();
 function resetDevice(device) {
     if (!config[device]) {
         debug("Device not found in config", device);
+        console.log(`Device not found: ${device}`);
         return;
     }
     config[device].sendingStatus.isCurrentlySending = false;
     config[device].sendingStatus.hasSentLength = false;
     config[device].sendingStatus.currentBufferPos = 0;
     config[device].sendingStatus.buf = null;
+    console.log(`Device found: ${device}`);
 }
 
 function reloadConfig(device) {
@@ -135,7 +162,7 @@ function reloadConfig(device) {
         console.log("Schedule file for device does not exist!");
         return;
     }
-
+    console.log('Reloading config for device', device);
     debug("Reloading config for device", device);
 
     const schedule = fs.readFileSync(scheduleFilePath);
@@ -148,6 +175,7 @@ function reloadConfig(device) {
 function resetAppletIfNeeded(device) { 
     if (config[device].pinApplet) {
         // debug("Applet pinned, not resetting applet for device", device);
+        console.log(`resetAppletIfNeeded()[167]: Applet pinned, not resetting applet for device ${device}`);
         return;
     }
     if(config[device].currentApplet >= (config[device].schedule.length - 1)) {
@@ -198,6 +226,7 @@ async function deviceLoop(device) {
 
     if(Date.now() > nextAppletNeedsRunAt && !config[device].sendingStatus.isCurrentlySending) {
         debug("applet pinned? %s", config[device].pinApplet ? "yes" : "no")
+        console.log("applet pinned? %s", config[device].pinApplet ? "yes" : "no");
         let oldApplet = config[device].currentApplet;
         if (oldApplet === -1) oldApplet = 0;
         if (!config[device].pinApplet) config[device].currentApplet = nextApplet;
@@ -252,6 +281,7 @@ async function deviceLoop(device) {
 
 function togglePinning(device) {
     const newVal = !config[device].pinApplet;
+    console.log(`togglePinning()[274]: ${device} pin toggled`);
     setPinned(device, newVal);
 }
 
@@ -259,6 +289,7 @@ function setPinned(device, pinned) {
     if (config[device].currentApplet === -1) return;
     const applet = config[device].schedule[config[device].currentApplet];
     debug(`${pinned ? 'Pinning' : 'Unpinning'} ${applet.name} applet on device`, device)
+    console.log(`setPinned()[282]: ${pinned ? 'Pinning' : 'Unpinning'} ${applet.name} applet on ${device}`);
     config[device].pinApplet = pinned;
 
     if (!pinned) {
@@ -270,6 +301,7 @@ function pinApplet(device, index) {
     const scheduleLength = config[device].schedule.length;
     if (index >= scheduleLength) {
         debug("Pin failed: Invalid applet index", index, "for device", device);
+        
         return;
     }
     config[device].currentApplet = index;
@@ -277,12 +309,15 @@ function pinApplet(device, index) {
 }
 
 function publishToDevice(device, message) {
+    //console.log(`publishToDevice()[302]: Publishing: ${message} to ${device}`);
     return client.publish(`${DEVICE_TOPIC_PREFIX}/${device}/rx`, message);
 }
 
 function handleDeviceResponse(device, payload) {
+    //console.log("handleDeviceResponse");
     const message = payload.toString('utf8');
     if (message == "PIN" || message == "UNPIN") {
+        //console.log(`handleDeviceResponse()[310]: ${device} was ${message}`);
         togglePinning(device);
     } else if (message.indexOf("PIN:") === 0) {
         const val = message.split("PIN:")[1];
@@ -292,17 +327,24 @@ function handleDeviceResponse(device, payload) {
             if(config[device].sendingStatus.hasSentLength == false) {
                 config[device].sendingStatus.hasSentLength = true;
                 publishToDevice(device, config[device].sendingStatus.buf.length.toString());
+                console.log(`handleDeviceResponse()[320]: Publishing to: ${device}, Payload size: ${config[device].sendingStatus.buf.length.toString()}`);
             } else {
+                //console.log(`handleDeviceResponse()[322]: ${device} was ${message}`);
+                //console.log(`handleDeviceResponse()[323]: CurrentBufferPos: ${config[device].sendingStatus.currentBufferPos} and ${config[device].sendingStatus.currentBufferPos+chunkSize}`);
                 let chunk = config[device].sendingStatus.buf.slice(config[device].sendingStatus.currentBufferPos, config[device].sendingStatus.currentBufferPos+chunkSize);
                 config[device].sendingStatus.currentBufferPos += chunkSize;
                 publishToDevice(device, chunk);
+                //console.log(`handleDeviceResponse()[319]: Publishing: ${chunk} to ${device}`);
+                //console.log(`Publishing chunk to ${device}: ${config[device].sendingStatus.currentBufferPos}/${config[device].sendingStatus.buf.length}`);
             }
         } else {
             publishToDevice(device, "FINISH");
+            console.log(`handleDeviceResponse()[323]: Publishing: FINISH to ${device}`);
         }
     } else {
         if(message === "DECODE_ERROR" || message === "PUSHED") {
             debug(`${device} ${message}`);
+            //console.log(`handleDeviceResponse()[328]: ${device} replied ${message}`);
             config[device].currentAppletStartedAt = Date.now();
             resetDevice(device);
         } else if(message === "DEVICE_BOOT") {
@@ -310,6 +352,7 @@ function handleDeviceResponse(device, payload) {
             resetDevice(device);
         } else if(message === "TIMEOUT") {
             debug(`${device} rx timeout!`);
+            console.log(`handleDeviceResponse()[336]: ${device} rx timeout`);
             resetDevice(device);
         }
         config[device].connected = true;
@@ -365,6 +408,7 @@ function render(name, config) {
             if(code == 0) {
                 if(outputError.indexOf("skip_execution") == -1) {
                     debug(`rendered ${name} successfully!`);
+                    console.log(`render(): rendered ${name} successfully!`);
                     resolve({
                         skipped: false,
                         imageData: fs.readFileSync(`${APPLET_FOLDER}/${name}/${name}.webp`),
@@ -393,6 +437,7 @@ function addJob(scheduler, type, device) {
             milliseconds: Number.isInteger(DEVICE_LOOP_INTERVAL) ? DEVICE_LOOP_INTERVAL : ms(DEVICE_LOOP_INTERVAL),
         };
         // debug(`Adding loop job for ${device}...`);
+        console.log(`Adding loop job for ${device}...`);
         // debug(options);
         job = new SimpleIntervalJob(options, new Task(id, () => deviceLoop(device)), { id });
     } else if (type == "ping") {
@@ -401,6 +446,7 @@ function addJob(scheduler, type, device) {
             milliseconds: Number.isInteger(DEVICE_PING_INTERVAL) ? DEVICE_PING_INTERVAL : ms(DEVICE_PING_INTERVAL),
         };
         // debug(`Adding ping job for ${device}...`);
+        console.log(`Adding ping job for ${device}...`);
         // debug(options);
         job = new SimpleIntervalJob(options, new Task(id, () => publishToDevice(device, "PING")), { id });
     }
@@ -413,9 +459,11 @@ function addJob(scheduler, type, device) {
 }
 
 function onDeviceConnect() {
+    console.log("Running onDeviceConnect");
     for(const [device, _] of Object.entries(config)) {
         client.subscribe(`${DEVICE_TOPIC_PREFIX}/${device}/tx`, function (err) {
             if (!err) {    
+                console.log("There was not an Error", device);
                 if (!config[device].offlineWatchdog) {            
                     const dog = new Watchdog(Number.isInteger(DEVICE_TIMEOUT) ? DEVICE_TIMEOUT : ms(DEVICE_TIMEOUT));
                     config[device].offlineWatchdog = dog;
@@ -426,12 +474,14 @@ function onDeviceConnect() {
                 }
             } else {
                 debug(`Couldn't subscribe to ${device} response channel.`);
+                console.log(`Couldn't subscribe to ${device} response channel.`);
             }
         });
     }
 }
 
 function onDeviceUpdated(device) {
+    //console.log(`onDeviceUpdated(): Updating ${device}...`);
     config[device].connected = true;
 }
 
@@ -445,25 +495,35 @@ function onDeviceMessage(topic, message) {
     if(topic.indexOf("tx") != -1) {
       const device = topic.split("/")[1];
       config[device].offlineWatchdog.feed();
-      handleDeviceResponse(device, message);
+      //console.log(`onDeviceMessage()[485]: Got ${message} from ${device}`);
+      handleDeviceResponse(device, message);      
     }
 }
 
 function onGracefulExit(code) {
     debug(`Graceful exit received...${code}`);
+    console.log("it said naa", code);
     client.end(false);
 }
 
 function onDisconnect(reconnect = true) {
+    console.log("Running onDisconnect");
     scheduler.stop();
     if (reconnect) {
         client.reconnect();
+        console.log("Trying to reconnect to MQTT...");
     }
 }
 
+console.log("Connecting");
+client.on('connect', () => {
+    console.log(`Connected`)
+  })
 client.on('connect', onDeviceConnect);
 client.on("disconnect", onDisconnect);
+console.log("Disconnected");
 client.on("error", onDisconnect);
 client.on("close", onDisconnect.bind(this, false));
 client.on('message', onDeviceMessage);
 process.once('SIGTERM', onGracefulExit);
+console.log("Done?");
